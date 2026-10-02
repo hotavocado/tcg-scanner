@@ -66,6 +66,37 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
+def load_schedule():
+    try:
+        with open(os.path.join(STATE_DIR, "sources.json")) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_schedule(sched):
+    path = os.path.join(STATE_DIR, "sources.json")
+    with open(path + ".tmp", "w") as f:
+        json.dump(sched, f, indent=1, sort_keys=True)
+    os.replace(path + ".tmp", path)
+
+
+def source_wait(adapter, rec):
+    """Seconds between polls of one source: its own cadence, widened by its
+    own backoff. A failing source never slows the others."""
+    mins = getattr(adapter, "INTERVAL_MINS", 1)
+    if rec.get("fails"):
+        mins = max(mins, BACKOFF_MINS[min(rec["fails"], len(BACKOFF_MINS) - 1)])
+    return mins * 60
+
+
+def source_due(adapter, rec, now):
+    if not rec.get("last_try"):
+        return True
+    since = (now - dt.datetime.fromisoformat(rec["last_try"].replace("Z", "+00:00"))).total_seconds()
+    return since >= source_wait(adapter, rec) - 5
+
+
 def pages_remote():
     import subprocess
     r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)), "remote", "get-url", "origin"],
@@ -95,6 +126,8 @@ def diff(old, products, now=None):
     for p in products:
         k = key(p)
         prev = old.get(k)
+        if not p.get("name"):
+            p = {**p, "name": (prev or {}).get("name") or f"{p['source']} SKU {p['id']}"}
         stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         changed = prev is None or any(prev.get(f) != p[f] for f in TRACKED)
         state[k] = {f: p.get(f) for f in KEPT + TRACKED}
@@ -157,7 +190,8 @@ def format_alert(kind, p, now=None):
         action = "listed, out of stock"
     else:
         action = "buy now"
-    return f"**{kind}** · {p['name']}\n{price} · {action}\n<{p['url']}>"
+    seller = f" · seller {p['seller']}" if p.get("seller") else ""
+    return f"**{kind}** · {p['name']}\n{price} · {action}{seller}\n<{p['url']}>"
 
 
 def post(env, lines):
@@ -212,22 +246,35 @@ def main():
         log("previous run still going, skipping")
         return 0
     site = Site(STATE_DIR, pages_remote())
+    scheduled = not args.dry_run and not args.test_alert
+    sched = load_schedule()
+    now = dt.datetime.now(dt.timezone.utc)
 
-    if not args.dry_run and not args.test_alert and backing_off(site):
-        return 0
-
-    by_source, errors = {}, []
+    by_source = {}
     for a in ADAPTERS:
+        rec = sched.setdefault(a.SOURCE, {})
+        if scheduled and not source_due(a, rec, now):
+            continue
+        rec["last_try"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             got = a.fetch()
         except Exception as e:  # one broken source must not stop the others
-            errors.append(f"{a.SOURCE}: {type(e).__name__}: {e}")
-            log(f"{a.SOURCE}: FAILED {errors[-1]}")
-            continue
-        log(f"{a.SOURCE}: {len(got)} products, {sum(p['on_sale'] for p in got)} on sale")
-        if not got:  # an empty answer leaves the source blind, so it is not healthy
-            errors.append(f"{a.SOURCE}: returned 0 products")
-        by_source[a.SOURCE] = got
+            got, error = None, f"{a.SOURCE}: {type(e).__name__}: {e}"
+        else:
+            log(f"{a.SOURCE}: {len(got)} products, {sum(p['on_sale'] for p in got)} on sale")
+            # an empty answer leaves the source blind, so it is not healthy
+            error = None if got else f"{a.SOURCE}: returned 0 products"
+        if error:
+            rec["fails"] = rec.get("fails", 0) + 1
+            rec["error"] = error[:300]
+            log(f"{a.SOURCE}: FAILED {error}, next try in {source_wait(a, rec) // 60} min")
+        else:
+            rec.update(fails=0, error=None, count=len(got), on_sale=sum(p["on_sale"] for p in got))
+        if got is not None:
+            by_source[a.SOURCE] = got
+    if scheduled:
+        save_schedule(sched)
+    errors = [sched[a.SOURCE]["error"] for a in ADAPTERS if sched.get(a.SOURCE, {}).get("fails")]
     products = [p for got in by_source.values() for p in got]
 
     if args.test_alert:
@@ -261,13 +308,13 @@ def main():
         state, alerts = old, []
 
     ok = not errors
-    sources = {src: {"count": len(got), "on_sale": sum(p["on_sale"] for p in got)} for src, got in by_source.items()}
+    sources = {a.SOURCE: {"count": sched[a.SOURCE].get("count", 0), "on_sale": sched[a.SOURCE].get("on_sale", 0)}
+               for a in ADAPTERS if a.SOURCE in sched}
     flipped = site.record(ok, sources, "; ".join(errors), alerts)
-    fails = site.failures()
     if flipped:
-        msg = (f"**SCANNER BACKING OFF** · {'; '.join(errors)[:300]}\nRetrying in {BACKOFF_MINS[1]} min, "
-               f"widening to {BACKOFF_MINS[-1]} min while it keeps failing." if not ok
-               else "**SCANNER RECOVERED** · polling every minute again.")
+        msg = (f"**SCANNER BACKING OFF** · {'; '.join(errors)[:300]}\nThat source retries in {BACKOFF_MINS[1]} min, "
+               f"widening to {BACKOFF_MINS[-1]} min while it keeps failing. Other sources keep polling." if not ok
+               else "**SCANNER RECOVERED** · every source polling on schedule again.")
         try:
             post(env or load_env(), [msg])
         except Exception as e:
@@ -282,19 +329,6 @@ def main():
         except Exception as e:
             log(f"dashboard publish failed: {e}")
     return 0 if ok else 1
-
-
-def backing_off(site):
-    """After failures, skip runs until the backoff interval has passed."""
-    fails = site.failures()
-    if not fails:
-        return False
-    wait = BACKOFF_MINS[min(fails, len(BACKOFF_MINS) - 1)] * 60
-    since = site.since_last_run()
-    if since is not None and since < wait - 5:
-        log(f"backing off: {fails} failure(s), next try in {int(wait - since)}s")
-        return True
-    return False
 
 
 if __name__ == "__main__":

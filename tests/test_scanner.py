@@ -2,11 +2,12 @@ import datetime as dt
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scanner
-from adapters import pbandai
+from adapters import bestbuy, pbandai
 
 NOW = dt.datetime(2026, 10, 2, 23, 0, tzinfo=dt.timezone.utc)
 
@@ -114,7 +115,7 @@ class Main(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.got = [prod("A1")]
         self.posted = []
-        fake = type("Fake", (), {"SOURCE": "pbandai", "fetch": staticmethod(lambda: list(self.got))})
+        fake = self.fake = type("Fake", (), {"SOURCE": "pbandai", "fetch": staticmethod(lambda: list(self.got))})
         for name, val in {
             "STATE_DIR": self.dir, "STATE_FILE": os.path.join(self.dir, "state.json"),
             "LOCK_FILE": os.path.join(self.dir, "lock"), "ADAPTERS": [fake],
@@ -132,9 +133,65 @@ class Main(unittest.TestCase):
         import json
         return json.load(open(os.path.join(self.dir, "health.json")))
 
+    def later(self, mins=20):
+        """Pretend every source last polled `mins` ago."""
+        sched = scanner.load_schedule()
+        then = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for rec in sched.values():
+            rec["last_try"] = then
+        scanner.save_schedule(sched)
+
+    def test_runs_inside_the_interval_skip_the_source(self):
+        calls = []
+        self.fake.fetch = staticmethod(lambda: calls.append(1) or list(self.got))
+        scanner.main()
+        scanner.main()
+        self.assertEqual(len(calls), 1)
+        self.later(1)
+        scanner.main()
+        self.assertEqual(len(calls), 2)
+
+    def test_slow_source_keeps_its_own_cadence(self):
+        calls = []
+        slow = type("Slow", (), {"SOURCE": "bestbuy", "INTERVAL_MINS": 2,
+                                 "fetch": staticmethod(lambda: calls.append(1) or [dict(prod("S1"), source="bestbuy")])})
+        with mock.patch.object(scanner, "ADAPTERS", [self.fake, slow]):
+            scanner.main()
+            self.later(1)
+            scanner.main()
+            self.assertEqual(len(calls), 1)
+            self.later(2)
+            scanner.main()
+            self.assertEqual(len(calls), 2)
+
+    def test_failing_source_backs_off_alone(self):
+        good, bad = [], []
+
+        def boom():
+            bad.append(1)
+            raise RuntimeError("akamai")
+        broken = type("Broken", (), {"SOURCE": "bestbuy", "fetch": staticmethod(boom)})
+        self.fake.fetch = staticmethod(lambda: good.append(1) or list(self.got))
+        with mock.patch.object(scanner, "ADAPTERS", [self.fake, broken]):
+            self.assertEqual(scanner.main(), 1)
+            self.assertTrue(any("BACKING OFF" in line for batch in self.posted for line in batch))
+            self.later(1)  # bandai is due again, bestbuy is backing off (2 min)
+            self.assertEqual(scanner.main(), 1)
+            self.assertEqual((len(good), len(bad)), (2, 1))
+            self.assertIn("akamai", self.health()["last_error"])
+            self.later(2)
+            scanner.main()
+            self.assertEqual(len(bad), 2)
+            self.assertEqual(scanner.load_schedule()["bestbuy"]["fails"], 2)
+            broken.fetch = staticmethod(lambda: [dict(prod("S1"), source="bestbuy")])
+            self.later(5)
+            self.assertEqual(scanner.main(), 0)
+            self.assertTrue(any("RECOVERED" in line for batch in self.posted for line in batch))
+
     def test_empty_poll_is_a_failure(self):
         self.assertEqual(scanner.main(), 0)
         self.got = []
+        self.later()
         self.assertEqual(scanner.main(), 1)
         self.assertEqual(self.health()["consecutive_failures"], 1)
         self.assertIn("returned 0 products", self.health()["last_error"])
@@ -142,17 +199,15 @@ class Main(unittest.TestCase):
     def test_failed_alert_post_is_a_failure_and_retries(self):
         scanner.main()  # seeds silently
         self.got = [prod("A1"), prod("B2")]
+        self.later()
 
         def boom(env, lines):
             raise RuntimeError("discord 500")
-        with __import__("unittest").mock.patch.object(scanner, "post", boom):
+        with mock.patch.object(scanner, "post", boom):
             self.assertEqual(scanner.main(), 1)
         self.assertEqual(self.health()["consecutive_failures"], 1)
         self.assertNotIn("pbandai:B2", scanner.load_state())  # unsaved, so the alert fires again
-        h = self.health()
-        h["last_run"] = "2000-01-01T00:00:00Z"
-        import json
-        json.dump(h, open(os.path.join(self.dir, "health.json"), "w"))
+        self.later()
         self.assertEqual(scanner.main(), 0)
         self.assertTrue(any("B2" in line for batch in self.posted for line in batch))
 
@@ -196,14 +251,21 @@ class Health(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.site = Site(self.dir)
 
-    def test_flip_only_on_change_and_backoff_widens(self):
+    def test_flip_only_on_change(self):
         self.assertFalse(self.site.record(True, {"pbandai": {"count": 1}}))
         self.assertTrue(self.site.record(False, error="HTTPError 403"))
         self.assertFalse(self.site.record(False, error="HTTPError 403"))
         self.assertEqual(self.site.failures(), 2)
-        self.assertTrue(scanner.backing_off(self.site))
         self.assertTrue(self.site.record(True, {}))
-        self.assertFalse(scanner.backing_off(self.site))
+
+    def test_source_backoff_widens(self):
+        a = type("A", (), {})
+        self.assertEqual(scanner.source_wait(a, {}), 60)
+        self.assertEqual(scanner.source_wait(a, {"fails": 2}), 300)
+        self.assertEqual(scanner.source_wait(a, {"fails": 9}), 900)
+        slow = type("S", (), {"INTERVAL_MINS": 2})
+        self.assertEqual(scanner.source_wait(slow, {}), 120)
+        self.assertEqual(scanner.source_wait(slow, {"fails": 1}), 120)
 
     def test_alert_log_newest_first_and_capped(self):
         for i in range(60):
@@ -215,6 +277,90 @@ class Health(unittest.TestCase):
 
     def test_publish_without_remote_is_a_noop(self):
         self.assertFalse(self.site.publish({}))
+
+
+def bb(sku="6685240", name="Bandai - One Piece Card Game Booster Pack OP-17 (1 Pack per Order)",
+       price=4.99, seller="1P", pickup=True):
+    return {"sku": sku, "name": name, "url": None, "price": price, "seller": seller, "pickup": pickup, "button": None}
+
+
+class BestBuy(unittest.TestCase):
+    def one(self, **kw):
+        return bestbuy.parse({"sa_status": 200, "errors": [], "items": [bb(**kw)]})
+
+    def test_first_party_pickup_under_msrp_is_buyable(self):
+        p, = self.one()
+        self.assertTrue(p["on_sale"] and p["in_stock"])
+        self.assertEqual(p["url"], "https://www.bestbuy.com/site/6685240.p?skuId=6685240")
+
+    def test_marketplace_listing_never_alerts(self):
+        # ST-31 measured 2026-10-02: 3P at $44.99, JSON-LD still claims seller Best Buy
+        p, = self.one(sku="12940921", name="Bandai - One Piece Card Game Starter Deck 31 (ST-31)",
+                      price=44.99, seller="3P")
+        self.assertFalse(p["on_sale"] or p["in_stock"])
+        old = scanner.diff({}, [dict(p, in_stock=False)], NOW)[1]
+        self.assertEqual(scanner.diff(old, [p], NOW)[0], [])
+
+    def test_unknown_seller_rides_on_store_pickup(self):
+        p, = self.one(seller=None)
+        self.assertTrue(p["in_stock"])
+        p, = self.one(seller=None, pickup=False)
+        self.assertFalse(p["in_stock"])
+
+    def test_over_msrp_is_not_in_stock(self):
+        p, = self.one(name="Bandai - One Piece Card Game Sleeved Booster Pack OP-17 (12 Cards)", price=29.98)
+        self.assertTrue(p["on_sale"])
+        self.assertFalse(p["in_stock"])
+
+    def test_pickup_without_a_price_is_not_in_stock(self):
+        p, = self.one(price=None)
+        self.assertFalse(p["in_stock"])
+
+    def test_ceilings(self):
+        self.assertEqual(bestbuy.ceiling("One Piece Starter Deck 31: RED (ST-31)"), 14.99)
+        self.assertEqual(bestbuy.ceiling("Royal Lineage Japanese Booster Pack OP-10 | Box of 24 Packs"), 119.99)
+        self.assertEqual(bestbuy.ceiling("Booster Pack Lot - 3 Packs"), 5.99)
+        self.assertIsNone(bestbuy.ceiling("Illustration Box Vol. 8 (IB-08) - 4 Packs, Promos"))
+
+    def test_restock_flip_alerts(self):
+        p, = self.one()
+        old = scanner.diff({}, [dict(p, in_stock=False)], NOW)[1]
+        self.assertEqual([k for k, _ in scanner.diff(old, [p], NOW)[0]], ["RESTOCK"])
+
+    def test_other_games_dropped_unnamed_kept(self):
+        got = bestbuy.parse({"sa_status": 200, "errors": [], "items": [
+            bb(sku="1", name="Pokemon - Trading Card Game: Tech Sticker Collection"),
+            bb(sku="2", name=None), bb(sku="3")]})
+        self.assertEqual([p["id"] for p in got], ["2", "3"])
+        self.assertIsNone(got[0]["name"])
+
+    def test_skeleton_tile_keeps_last_known_name(self):
+        p, = self.one(pickup=False)
+        old = scanner.diff({}, [p], NOW)[1]
+        alerts, state = scanner.diff(old, [dict(p, name=None, in_stock=True)], NOW)
+        self.assertEqual(state["bestbuy:6685240"]["name"], p["name"])
+        self.assertEqual(alerts[0][1]["name"], p["name"])
+        self.assertEqual(scanner.diff({}, [dict(p, name=None)], NOW)[1]["bestbuy:6685240"]["name"],
+                         "bestbuy SKU 6685240")
+
+    def test_alert_shows_seller_as_read(self):
+        p, = self.one(seller=None)
+        self.assertIn("seller none", scanner.format_alert("RESTOCK", p))
+        self.assertNotIn("seller", scanner.format_alert("RESTOCK", prod()))
+
+    def test_page_errors_and_bad_availability_raise(self):
+        with self.assertRaises(RuntimeError):
+            bestbuy.parse({"sa_status": 200, "errors": ["page 3: http 403"], "items": [bb()]})
+        with self.assertRaises(RuntimeError):
+            bestbuy.parse({"sa_status": 403, "errors": [], "items": [bb()]})
+
+    def test_key_read_without_exporting(self):
+        import tempfile
+        f = tempfile.NamedTemporaryFile("w", delete=False)
+        f.write("# comment\nexport FIRECRAWL_API_KEY='fc-test'\n")
+        f.close()
+        with mock.patch.object(bestbuy, "KEY_FILE", f.name):
+            self.assertEqual(bestbuy.api_key(), "fc-test")
 
 
 if __name__ == "__main__":

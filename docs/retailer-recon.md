@@ -1,6 +1,6 @@
 # Retailer recon (2026-10-02)
 
-What each store's stock data looks like from this box, measured on 2026-10-02 between 23:13Z and 23:25Z.
+What each store's stock data looks like from this box, measured on 2026-10-02 between 23:13Z and 23:40Z.
 Stores, in Mike's order: Target Atlanta Hwy, Best Buy Oconee Connector, Walmart Old Lexington Rd,
 Walmart Epps Bridge, Barnes & Noble Atlanta Hwy. All in Athens, GA.
 Gates on every adapter: first-party stock only (sold by the retailer, pickup at the named store), price at or under MSRP.
@@ -36,19 +36,32 @@ own JSON API from inside the loaded page (same origin, the page's cookies). With
   Hypothesis, NOT measured: Target's trading-card shelf is vendor-stocked and never reaches Target's inventory system. Waiting on Mike
   to confirm which deck he saw and when.
 
-## Best Buy: in progress
+## Best Buy: LIVE in the scanner (adapters/bestbuy.py, every 2 min)
 
 - Store: **511 = 1791 Oconee Connector** (stores.bestbuy.com/ga/athens/1791-oconee-connector-511.html).
-- Control SKU 6685240 (OP-17 single booster, "1 Pack per Order"), page price $4.99.
-- Stock: `POST /productfulfillment/c/api/2.0/storeAvailability`, JSON body
-  `{locationId:"511", zipCode:"30606", showOnShelf:true, lookupInStoreQuantity:true, consolidated:true, showInStore:true, onlyBestBuyLocations:true, pickupTypes:[...], items:[{sku, quantity:1, itemSeqNumber:"1", ...}]}`
-  returns `buttonState[].buttonState` (SOLD_OUT at 23:22Z), `shipping.items[].shippingEligible`, `ispu.items[].{pickupEligible, inStoreOnly, locations}`.
-  Multiple SKUs fit in one call. Store pickup implies sold by Best Buy, so pickup at 511 doubles as the first-party gate.
-  `/button-state/api/v5/button-state` returns HTTP 400 with a "Page Not Found" HTML page, so it's not usable.
-- Discovery: `/site/searchpage.jsp?st=one+piece+card+game` loads (listCount 70). The top tiles are OP-17 SKUs 1307787, 1307679, 6685240 and IB-07 1297155.
-  OPEN: the in-page SKU-to-title extraction returned 0 titles, because the current markup is not `li.sku-item`.
-  Next: return one tile's outerHTML (about 1.5KB) to learn the selectors, then build the adapter.
-- The control can't be confirmed live tonight (sold out). It gets confirmed when the scanner catches the next restock flip.
+- One Firecrawl stealth scrape of `/site/searchpage.jsp?st=one+piece+card+game` per poll runs `adapters/bestbuy.js` in-page.
+  A quiet poll takes about 20s and 1 credit; every 2 min is 720 credits/day.
+- Discovery: `li.product-list-item[data-product-id]`, with pages 2+ fetched in-page from `?cp=N` (5 pages, 68 to 70 SKUs, which matches
+  the page's own listCount of 70). Pages 2+ come back as skeleton tiles with no title or price. Names come from the Apollo SSR payloads
+  (`window[Symbol.for("ApolloSSRDataTransport")]` pushes, which hold JS `undefined` and have to be nulled before `JSON.parse`); about 28 of 68 carry one.
+  The search also returns Pokemon and sports cards, so named non-One-Piece SKUs are dropped and unnamed ones kept.
+- Stock: `POST /productfulfillment/c/api/2.0/storeAvailability` with every SKU in one call, body
+  `{locationId:"511", zipCode:"30606", showOnShelf:true, lookupInStoreQuantity:true, xboxAllAccess:false, consolidated:true, showOnlyOnShelf:false,
+  showInStore:true, pickupTypes:["UPS_ACCESS_POINT","FEDEX_HAL"], onlyBestBuyLocations:true, items:[{sku, condition:null, quantity:1, itemSeqNumber,
+  reservationToken:null, selectedServices:[], requiredAccessories:[], isTradeIn:false, isLeased:false}]}`.
+  Returns `buttonState[].{skuId, buttonState}`, `shipping.items[].shippingEligible`, `ispu.items[].{sku, pickupEligible, inStoreOnly, locations}`.
+  All 68 read SOLD_OUT with no pickup at 23:37Z, so the shape of a populated `locations` entry is still unseen; the adapter logs the first one it gets.
+- Price: product page `/site/<sku>.p?skuId=<sku>` JSON-LD `offers.price` (4.99 on control 6685240, matching the tile). It's fetched only for SKUs
+  that are pickup-eligible at 511, so a quiet poll stays one scrape. `/api/3.0/priceBlocks` is dead: it returns "product not found" for current SKUs.
+- Seller: Apollo `Product.seller.classification` reads `1P` or `3P` where it's present: 1 x 1P, 15 x 3P and 52 missing out of 68, and the product page
+  doesn't fill the gap (12599151 is null there too). JSON-LD is useless for this: it says seller "Best Buy" and InStock on ST-31 (12940921),
+  which is a sold-out 3P listing at $44.99.
+- **Gate, and which part is inferred:** an explicit `3P` never alerts. A missing seller alerts only with pickup at 511, on the rule that
+  marketplace items can't be picked up in a Best Buy store. **That rule is INFERRED, not measured.** Every alert prints the seller as read
+  (`seller 1P / 3P / none`), so the first alert on a `none` SKU is the rule's test. Price must also be at or under a ceiling
+  (pack $5.99, starter deck $14.99, 24-pack box $119.99; the ceilings are ours, not Bandai's published MSRPs). A price we can't read means no alert.
+- Controls: positive = 6685240 (OP-17 single pack, $4.99, 1P), SOLD_OUT tonight; confirmed only when the scanner catches its next restock.
+  Negative = the 15 3P listings, e.g. ST-31 12940921 and the C3747 Japanese imports, which must never alert.
 
 ## Not started
 

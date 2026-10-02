@@ -36,11 +36,12 @@ own JSON API from inside the loaded page (same origin, the page's cookies). With
   Hypothesis, NOT measured: Target's trading-card shelf is vendor-stocked and never reaches Target's inventory system. Waiting on Mike
   to confirm which deck he saw and when.
 
-## Best Buy: LIVE in the scanner (adapters/bestbuy.py, every 2 min)
+## Best Buy: LIVE in the scanner (adapters/bestbuy.py, every 10 min)
 
 - Store: **511 = 1791 Oconee Connector** (stores.bestbuy.com/ga/athens/1791-oconee-connector-511.html).
 - One Firecrawl stealth scrape of `/site/searchpage.jsp?st=one+piece+card+game` per poll runs `adapters/bestbuy.js` in-page.
-  A quiet poll takes about 20s and 1 credit; every 2 min is 720 credits/day.
+  A quiet poll takes about 20s and 1 credit. Every 10 min is 144 credits/day, about 4,320 a month, which fits the 5,000-credit plan;
+  every 2 min (720/day) would use up the plan in under a week.
 - Discovery: `li.product-list-item[data-product-id]`, with pages 2+ fetched in-page from `?cp=N` (5 pages, 68 to 70 SKUs, which matches
   the page's own listCount of 70). Pages 2+ come back as skeleton tiles with no title or price. Names come from the Apollo SSR payloads
   (`window[Symbol.for("ApolloSSRDataTransport")]` pushes, which hold JS `undefined` and have to be nulled before `JSON.parse`); about 28 of 68 carry one.

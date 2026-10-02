@@ -14,10 +14,11 @@ under the MSRP ceiling. A marketplace listing can never alert.
 import json
 import os
 import re
+import urllib.parse
 import urllib.request
 
 SOURCE = "bestbuy"
-INTERVAL_MINS = 2
+INTERVAL_MINS = 10
 SEARCH_URL = "https://www.bestbuy.com/site/searchpage.jsp?st=one+piece+card+game"
 API = "https://api.firecrawl.dev/v2/scrape"
 KEY_FILE = os.path.expanduser(os.environ.get("TCG_FIRECRAWL_ENV", "~/.claude/secrets/firecrawl.env"))
@@ -27,11 +28,14 @@ ITEM_URL = "https://www.bestbuy.com/site/{sku}.p?skuId={sku}"
 # Ceilings, not exact MSRPs: Best Buy's own price for the OP-17 single pack is
 # $4.99. A product matching no pattern has no ceiling, because the 1P gate
 # already keeps out the marketplace resellers that price above MSRP.
+# Multi-pack products (double pack sets, lots, illustration boxes) get no
+# ceiling rather than a single pack's.
+MULTI_PACK = re.compile(r"double|\blot\b|\bset\b|\d+\s*packs", re.I)
 MSRP_CEILINGS = (
     (re.compile(r"starter deck|\bST-?\d", re.I), 14.99),
     (re.compile(r"booster box|24 packs|box of 24", re.I), 119.99),
-    (re.compile(r"booster pack|\bpack\b", re.I), 5.99),
 )
+SINGLE_PACK = (re.compile(r"booster pack|\bpack\b", re.I), 5.99)
 
 
 def api_key():
@@ -72,9 +76,13 @@ def scrape(timeout=150):
 
 
 def ceiling(name):
+    name = name or ""
     for pattern, cap in MSRP_CEILINGS:
-        if pattern.search(name or ""):
+        if pattern.search(name):
             return cap
+    pattern, cap = SINGLE_PACK
+    if pattern.search(name) and not MULTI_PACK.search(name):
+        return cap
     return None
 
 
@@ -98,7 +106,7 @@ def normalize(item):
         "drawing": False,
         "sale_start": None,
         "sale_end": None,
-        "url": item.get("url") or ITEM_URL.format(sku=item["sku"]),
+        "url": urllib.parse.urljoin("https://www.bestbuy.com/", item.get("url") or ITEM_URL.format(sku=item["sku"])),
         "seller": item.get("seller") or "none",  # shown on alerts: pickup-implies-1P is inferred, not measured
     }
 

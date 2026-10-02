@@ -319,8 +319,15 @@ class BestBuy(unittest.TestCase):
     def test_ceilings(self):
         self.assertEqual(bestbuy.ceiling("One Piece Starter Deck 31: RED (ST-31)"), 14.99)
         self.assertEqual(bestbuy.ceiling("Royal Lineage Japanese Booster Pack OP-10 | Box of 24 Packs"), 119.99)
-        self.assertEqual(bestbuy.ceiling("Booster Pack Lot - 3 Packs"), 5.99)
         self.assertIsNone(bestbuy.ceiling("Illustration Box Vol. 8 (IB-08) - 4 Packs, Promos"))
+        self.assertEqual(bestbuy.ceiling("Booster Pack OP-17 (1 Pack per Order)"), 5.99)
+        self.assertEqual(bestbuy.ceiling("Sleeved Booster Pack OP-17 (12 Cards)"), 5.99)
+        self.assertIsNone(bestbuy.ceiling("One Piece Card Game: Double Pack Set Vol. 9 (DP-09)"))
+        self.assertIsNone(bestbuy.ceiling("OP-17 Japanese Booster Pack Lot - 3 Packs - 18 Cards"))
+
+    def test_relative_urls_become_absolute(self):
+        p, = bestbuy.parse({"sa_status": 200, "errors": [], "items": [dict(bb(), url="/product/x/J3GW")]})
+        self.assertEqual(p["url"], "https://www.bestbuy.com/product/x/J3GW")
 
     def test_restock_flip_alerts(self):
         p, = self.one()

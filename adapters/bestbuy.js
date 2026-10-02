@@ -10,7 +10,7 @@
 //    (marketplace). JSON-LD says seller "Best Buy" and InStock even for a 3P
 //    listing that is sold out, so it is trusted for name and price only.
 (async () => {
-  const STORE = "511", ZIP = "30606", MAX_PAGES = 6, MAX_PDP = 10;
+  const STORE = "511", ZIP = "30606", MAX_PAGES = 6, PDP_BATCH = 6;
   const out = { pages: 0, items: [], errors: [], picked: [] };
   const apollo = {};
   const dom = {};
@@ -92,11 +92,12 @@
 
   const pickup = s => { const a = avail[s] || {}; return !!a.eligible && (!a.locs.length || a.locs.includes(STORE)); };
   const pdp = {};
-  for (const s of order.filter(pickup).slice(0, MAX_PDP)) {
+  // Every pickup-eligible SKU gets a price: a missing price blocks its alert.
+  const readPdp = async s => {
     out.picked.push(s);
     try {
       const r = await fetch("/site/" + s + ".p?skuId=" + s, { credentials: "include" });
-      if (!r.ok) { out.errors.push("pdp " + s + ": http " + r.status); continue; }
+      if (!r.ok) { out.errors.push("pdp " + s + ": http " + r.status); return; }
       const doc = new DOMParser().parseFromString(await r.text(), "text/html");
       eatApollo(doc);
       for (const x of doc.querySelectorAll('script[type="application/ld+json"]')) {
@@ -110,7 +111,9 @@
         } catch (e) { /* not this block */ }
       }
     } catch (e) { out.errors.push("pdp " + s + ": " + e); }
-  }
+  };
+  const want = order.filter(pickup);
+  for (let i = 0; i < want.length; i += PDP_BATCH) await Promise.all(want.slice(i, i + PDP_BATCH).map(readPdp));
 
   for (const s of order) {
     const ap = apollo[s] || {};

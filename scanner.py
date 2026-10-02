@@ -100,6 +100,7 @@ def diff(old, products, now=None):
         state[k] = {f: p.get(f) for f in KEPT + TRACKED}
         state[k]["first_seen"] = (prev or {}).get("first_seen") or stamp
         state[k]["last_change"] = stamp if changed else (prev or {}).get("last_change")
+        state[k]["present"] = True
         actionable = p["on_sale"] and (p["in_stock"] or p["drawing"])
         if prev is None:
             if actionable or (not p["on_sale"] and _future(p["sale_start"], now)):
@@ -123,6 +124,10 @@ def plan(old, by_source, now=None):
         if not products:
             log(f"{source}: empty poll, skipped")
             continue
+        polled = {key(p) for p in products}
+        for k in state:
+            if k.startswith(source + ":") and k not in polled:
+                state[k] = {**state[k], "present": False}
         if not any(k.startswith(source + ":") for k in old):
             _, state = diff(state, products, now)
             log(f"{source}: seeded {len(products)} products, no alerts")
@@ -220,6 +225,8 @@ def main():
             log(f"{a.SOURCE}: FAILED {errors[-1]}")
             continue
         log(f"{a.SOURCE}: {len(got)} products, {sum(p['on_sale'] for p in got)} on sale")
+        if not got:  # an empty answer leaves the source blind, so it is not healthy
+            errors.append(f"{a.SOURCE}: returned 0 products")
         by_source[a.SOURCE] = got
     products = [p for got in by_source.values() for p in got]
 
@@ -240,12 +247,18 @@ def main():
             print(line, "\n")
         log(f"dry-run: {len(alerts)} alert(s), nothing posted or saved")
         return 0
-    env = load_env()
-    if lines:
-        for batch in chunks(lines):
-            post(env, batch)
-        log(f"posted {len(alerts)} alert(s): " + ", ".join(f"{k} {p['id']}" for k, p in alerts))
-    save_state(state)
+    env = None
+    try:
+        env = load_env()
+        if lines:
+            for batch in chunks(lines):
+                post(env, batch)
+            log(f"posted {len(alerts)} alert(s): " + ", ".join(f"{k} {p['id']}" for k, p in alerts))
+        save_state(state)
+    except Exception as e:  # unsaved state means the alerts retry next run
+        errors.append(f"alerts: {type(e).__name__}: {e}")
+        log(f"FAILED {errors[-1]}")
+        state, alerts = old, []
 
     ok = not errors
     sources = {src: {"count": len(got), "on_sale": sum(p["on_sale"] for p in got)} for src, got in by_source.items()}
@@ -256,7 +269,7 @@ def main():
                f"widening to {BACKOFF_MINS[-1]} min while it keeps failing." if not ok
                else "**SCANNER RECOVERED** · polling every minute again.")
         try:
-            post(env, [msg])
+            post(env or load_env(), [msg])
         except Exception as e:
             log(f"health alert failed: {e}")
     changed = state != old

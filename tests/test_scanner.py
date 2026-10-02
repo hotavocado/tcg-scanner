@@ -90,6 +90,73 @@ class Plan(unittest.TestCase):
         self.assertIn("target:T1", st)
 
 
+class Presence(unittest.TestCase):
+    def test_vanished_product_is_marked_absent_then_back(self):
+        a, b = prod("A1"), prod("B2")
+        state, _ = scanner.plan(state_of(a, b), {"pbandai": [a]}, NOW)
+        self.assertIs(state["pbandai:B2"]["present"], False)
+        self.assertIs(state["pbandai:A1"]["present"], True)
+        state, _ = scanner.plan(state, {"pbandai": [a, b]}, NOW)
+        self.assertIs(state["pbandai:B2"]["present"], True)
+
+    def test_empty_poll_does_not_mark_everything_absent(self):
+        old = state_of(prod("A1"))
+        state, _ = scanner.plan(old, {"pbandai": []}, NOW)
+        self.assertIs(state["pbandai:A1"]["present"], True)
+
+
+class Main(unittest.TestCase):
+    """main() end to end with a fake adapter, a temp state dir and no git remote."""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        self.dir = tempfile.mkdtemp()
+        self.got = [prod("A1")]
+        self.posted = []
+        fake = type("Fake", (), {"SOURCE": "pbandai", "fetch": staticmethod(lambda: list(self.got))})
+        for name, val in {
+            "STATE_DIR": self.dir, "STATE_FILE": os.path.join(self.dir, "state.json"),
+            "LOCK_FILE": os.path.join(self.dir, "lock"), "ADAPTERS": [fake],
+            "pages_remote": lambda: None, "load_env": lambda: {},
+            "post": lambda env, lines: self.posted.append(lines),
+        }.items():
+            p = mock.patch.object(scanner, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(sys, "argv", ["scanner.py"])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def health(self):
+        import json
+        return json.load(open(os.path.join(self.dir, "health.json")))
+
+    def test_empty_poll_is_a_failure(self):
+        self.assertEqual(scanner.main(), 0)
+        self.got = []
+        self.assertEqual(scanner.main(), 1)
+        self.assertEqual(self.health()["consecutive_failures"], 1)
+        self.assertIn("returned 0 products", self.health()["last_error"])
+
+    def test_failed_alert_post_is_a_failure_and_retries(self):
+        scanner.main()  # seeds silently
+        self.got = [prod("A1"), prod("B2")]
+
+        def boom(env, lines):
+            raise RuntimeError("discord 500")
+        with __import__("unittest").mock.patch.object(scanner, "post", boom):
+            self.assertEqual(scanner.main(), 1)
+        self.assertEqual(self.health()["consecutive_failures"], 1)
+        self.assertNotIn("pbandai:B2", scanner.load_state())  # unsaved, so the alert fires again
+        h = self.health()
+        h["last_run"] = "2000-01-01T00:00:00Z"
+        import json
+        json.dump(h, open(os.path.join(self.dir, "health.json"), "w"))
+        self.assertEqual(scanner.main(), 0)
+        self.assertTrue(any("B2" in line for batch in self.posted for line in batch))
+
+
 class Format(unittest.TestCase):
     def test_drawing_says_lottery_and_deadline(self):
         s = scanner.format_alert("DRAWING OPEN", prod(drawing=True), NOW)

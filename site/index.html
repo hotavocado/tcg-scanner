@@ -104,7 +104,7 @@ function render(d) {
     el.innerHTML = `Data flowing<small>Last check ${esc(ago(h.last_run))} · checks every minute, page updates every ${Math.round(d.heartbeat_secs / 60)} min or on any change</small>`;
   }
   const ps = d.products || [];
-  const live = ps.filter((p) => p.on_sale && (p.in_stock || p.drawing));
+  const live = ps.filter((p) => p.present !== false && p.on_sale && (p.in_stock || p.drawing));
   $("stats").innerHTML = [
     [ps.length, "watched"], [live.length, "buyable now"], [(d.alerts || []).length, "alerts sent"],
   ].map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join("");

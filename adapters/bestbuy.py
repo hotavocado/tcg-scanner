@@ -11,11 +11,10 @@ Gates (docs/retailer-recon.md): on_sale means not a known marketplace listing
 under the MSRP ceiling. A marketplace listing can never alert.
 """
 
-import json
-import os
-import re
 import urllib.parse
-import urllib.request
+
+from . import firecrawl
+from .msrp import ceiling
 
 SOURCE = "bestbuy"
 # Mike 2026-10-02 (dm-alyssa 84680, upper 84683): twice a day. 08:00 is the
@@ -23,70 +22,11 @@ SOURCE = "bestbuy"
 RUN_AT = ("08:00", "15:00")
 RUN_TZ = "America/New_York"
 SEARCH_URL = "https://www.bestbuy.com/site/searchpage.jsp?st=one+piece+card+game"
-API = "https://api.firecrawl.dev/v2/scrape"
-KEY_FILE = os.path.expanduser(os.environ.get("TCG_FIRECRAWL_ENV", "~/.claude/secrets/firecrawl.env"))
-SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bestbuy.js")
 ITEM_URL = "https://www.bestbuy.com/site/{sku}.p?skuId={sku}"
 
-# Ceilings, not exact MSRPs: Best Buy's own price for the OP-17 single pack is
-# $4.99. A product matching no pattern has no ceiling, because the 1P gate
-# already keeps out the marketplace resellers that price above MSRP.
-# Multi-pack products (double pack sets, lots, illustration boxes) get no
-# ceiling rather than a single pack's.
-MULTI_PACK = re.compile(r"double|\blot\b|\bset\b|\d+\s*packs", re.I)
-MSRP_CEILINGS = (
-    (re.compile(r"starter deck|\bST-?\d", re.I), 14.99),
-    (re.compile(r"booster box|24 packs|box of 24", re.I), 119.99),
-)
-SINGLE_PACK = (re.compile(r"booster pack|\bpack\b", re.I), 5.99)
 
-
-def api_key():
-    """Read FIRECRAWL_API_KEY from the same file the MCP launcher reads.
-    The key only ever goes into a request header."""
-    with open(KEY_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("export "):
-                line = line[len("export "):]
-            if line.startswith("FIRECRAWL_API_KEY="):
-                return line.split("=", 1)[1].strip().strip("'\"")
-    raise RuntimeError(f"FIRECRAWL_API_KEY not found in {KEY_FILE}")
-
-
-def scrape(timeout=150):
-    with open(SCRIPT) as f:
-        script = f.read()
-    body = {
-        "url": SEARCH_URL,
-        "proxy": "stealth",
-        "location": {"country": "US"},
-        "storeInCache": False,
-        "formats": ["markdown"],
-        "includeTags": ["#probe-none"],  # matches nothing, so no page text comes back
-        "actions": [{"type": "wait", "milliseconds": 1500}, {"type": "executeJavascript", "script": script}],
-    }
-    req = urllib.request.Request(
-        API, data=json.dumps(body).encode(), method="POST",
-        headers={"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        d = json.load(r)
-    if not d.get("success"):
-        raise RuntimeError(f"firecrawl: {str(d.get('error'))[:200]}")
-    returns = d["data"]["actions"]["javascriptReturns"]
-    return json.loads(returns[0]["value"])
-
-
-def ceiling(name):
-    name = name or ""
-    for pattern, cap in MSRP_CEILINGS:
-        if pattern.search(name):
-            return cap
-    pattern, cap = SINGLE_PACK
-    if pattern.search(name) and not MULTI_PACK.search(name):
-        return cap
-    return None
+def scrape():
+    return firecrawl.run(SEARCH_URL, "bestbuy.js")
 
 
 def normalize(item):

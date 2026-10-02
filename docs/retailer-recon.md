@@ -17,7 +17,18 @@ own JSON API from inside the loaded page (same origin, the page's cookies). With
 1 credit per scrape, and one scrape can query every watched product at once. Poll cadence is a cost choice:
 1/min = 1,440 credits/day per retailer.
 
-## Target: PARKED (positive control failed)
+## Target: LIVE as a probe (adapters/target.py, 08:00 and 15:00 America/New_York)
+
+**What the twice-daily polls test:** the hypothesis that Target's trading-card shelf is vendor-stocked and never reaches
+Target's inventory system. If it holds, every starter here reads OUT forever and the scanner never pings for Target. The first
+IN reading on a card item kills it, and that reading alerts like any other source. Mike's call (upper 84683): it's a probe, not a watcher.
+- Watchlist: the 9 starter tcins below, because search can't discover first-party OP products. Add new sets to `TCINS` by hand.
+- In stock = first party (`item.fulfillment.is_marketplace` not true), a store-1453 row with `order_pickup` or `in_store_only`
+  at IN_STOCK or LIMITED_STOCK, and price under the ceiling. In-store-only counts, because the question is whether it's on the shelf.
+- Instrument control: LEGO One Piece 95046363 goes in every query and must come back with a 1453 row, or the poll fails.
+  A query that silently dropped the store would read OUT forever, which looks exactly like the hypothesis holding.
+- Re-read 2026-10-02 by the adapter's first live run: all 9 OUT at 1453, LEGO IN_STOCK qty 10. Target's first-party prices: $11.99 to $16.99 for regular
+  starters, $19.99 for ST30 EX, $34.99 for ST-13 (Ultimate Deck) and ST-21 (GEAR5). Hence the $34.99 starter ceiling in `adapters/msrp.py`.
 
 - Public redsky key, embedded in every page: `9f36aeafbe60771e321a7cc95a78140772ab3e96`.
 - Stores, from nearby_stores_v1 at zip 30606: **1453 = Athens, 3065 Atlanta Hwy**; 3362 = Athens Broad Street; 2493 = Winder.

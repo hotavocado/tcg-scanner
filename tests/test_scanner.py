@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scanner
-from adapters import bestbuy, pbandai
+from adapters import bestbuy, firecrawl, pbandai, target
 
 NOW = dt.datetime(2026, 10, 2, 23, 0, tzinfo=dt.timezone.utc)
 
@@ -340,7 +340,8 @@ class BestBuy(unittest.TestCase):
         self.assertFalse(p["in_stock"])
 
     def test_ceilings(self):
-        self.assertEqual(bestbuy.ceiling("One Piece Starter Deck 31: RED (ST-31)"), 14.99)
+        self.assertEqual(bestbuy.ceiling("One Piece Starter Deck 31: RED (ST-31)"), 34.99)
+        self.assertEqual(bestbuy.ceiling("One Piece Trading Card Game: Yamato Starter Deck (ST 09)"), 34.99)
         self.assertEqual(bestbuy.ceiling("Royal Lineage Japanese Booster Pack OP-10 | Box of 24 Packs"), 119.99)
         self.assertIsNone(bestbuy.ceiling("Illustration Box Vol. 8 (IB-08) - 4 Packs, Promos"))
         self.assertEqual(bestbuy.ceiling("Booster Pack OP-17 (1 Pack per Order)"), 5.99)
@@ -389,8 +390,65 @@ class BestBuy(unittest.TestCase):
         f = tempfile.NamedTemporaryFile("w", delete=False)
         f.write("# comment\nexport FIRECRAWL_API_KEY='fc-test'\n")
         f.close()
-        with mock.patch.object(bestbuy, "KEY_FILE", f.name):
-            self.assertEqual(bestbuy.api_key(), "fc-test")
+        with mock.patch.object(firecrawl, "KEY_FILE", f.name):
+            self.assertEqual(firecrawl.api_key(), "fc-test")
+
+
+def tg(tcin="95042136", name="One Piece Card Game: Starter Deck Ex- Luffy &#38; Ace ST30", price=19.99,
+       marketplace=False, store="1453", pickup="UNAVAILABLE", in_store="OUT_OF_STOCK"):
+    return {"tcin": tcin, "name": name, "url": None, "price": price, "marketplace": marketplace,
+            "store": store, "pickup": pickup, "in_store": in_store, "qty": 0}
+
+
+LEGO = tg(tcin="95046363", name="LEGO ONE PIECE Dr. Hiriluk&#39;s Hideout 75641", in_store="IN_STOCK")
+
+
+class Target(unittest.TestCase):
+    def one(self, **kw):
+        return target.parse({"status": 200, "errors": [], "items": [tg(**kw), LEGO]})
+
+    def test_control_is_required_and_never_a_product(self):
+        self.assertEqual([p["id"] for p in self.one()], ["95042136"])
+        with self.assertRaises(RuntimeError):
+            target.parse({"status": 200, "errors": [], "items": [tg()]})
+        with self.assertRaises(RuntimeError):
+            target.parse({"status": 200, "errors": [], "items": [tg(), dict(LEGO, store=None)]})
+
+    def test_out_everywhere_is_out(self):
+        p, = self.one()
+        self.assertEqual(p["name"], "One Piece Card Game: Starter Deck Ex- Luffy & Ace ST30")
+        self.assertTrue(p["on_sale"])
+        self.assertFalse(p["in_stock"])
+
+    def test_on_the_shelf_counts_even_without_pickup(self):
+        p, = self.one(in_store="IN_STOCK")
+        self.assertTrue(p["in_stock"])
+        p, = self.one(pickup="LIMITED_STOCK")
+        self.assertTrue(p["in_stock"])
+
+    def test_stock_at_another_store_does_not_count(self):
+        p, = self.one(store="3362", in_store="IN_STOCK")
+        self.assertFalse(p["in_stock"])
+
+    def test_marketplace_and_over_msrp_never_alert(self):
+        p, = self.one(marketplace=True, in_store="IN_STOCK")
+        self.assertFalse(p["on_sale"] or p["in_stock"])
+        p, = self.one(price=44.99, in_store="IN_STOCK")
+        self.assertFalse(p["in_stock"])
+        p, = self.one(name="One Piece Trading Card Game GEAR5 ST 21 Starter Deck", price=34.99, in_store="IN_STOCK")
+        self.assertTrue(p["in_stock"])
+
+    def test_bad_status_raises(self):
+        with self.assertRaises(RuntimeError):
+            target.parse({"status": 435, "errors": [], "items": []})
+
+    def test_script_gets_the_watchlist(self):
+        import json
+        seen = {}
+        with mock.patch.object(firecrawl, "run", lambda url, f, script_vars=None: seen.update(script_vars) or {}):
+            target.scrape()
+        self.assertEqual(sorted(json.loads(seen["__TCINS__"])), sorted(list(target.TCINS) + [target.CONTROL_TCIN]))
+        self.assertIn("__TCINS__", open(os.path.join(os.path.dirname(target.__file__), "target.js")).read())
 
 
 if __name__ == "__main__":

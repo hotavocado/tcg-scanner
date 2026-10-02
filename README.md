@@ -4,8 +4,9 @@ Watches retailers for One Piece TCG drops and restocks and pings Mike in Discord
 
 - `scanner.py`: poll every adapter, diff against `~/.local/state/tcg-scanner/state.json`, post alerts.
 - `adapters/`: one module per retailer, each returning the same normalized product shape.
-  `pbandai` (Premium Bandai USA, every minute) and `bestbuy` (store 511 Oconee Connector, 08:00 and 15:00 ET,
-  one Firecrawl credit per poll; see `docs/retailer-recon.md`).
+  `pbandai` (Premium Bandai USA, every minute), `bestbuy` (store 511 Oconee Connector) and `target` (store 1453
+  Atlanta Hwy, a probe of 9 starter tcins), the last two at 08:00 and 15:00 ET for one Firecrawl credit each
+  (`adapters/firecrawl.py`). Price ceilings live in `adapters/msrp.py`. See `docs/retailer-recon.md`.
 - Config: `~/.config/tcg-scanner/env` (mode 600, never committed): `TCG_WEBHOOK_URL`, `TCG_MENTION_USER_ID`.
   The Best Buy adapter reads `FIRECRAWL_API_KEY` from `~/.claude/secrets/firecrawl.env`, the file the Firecrawl MCP uses.
 

@@ -24,12 +24,15 @@ import urllib.error
 import urllib.request
 
 from adapters import ADAPTERS
+from dashboard import Site
 
 ENV_FILE = os.path.expanduser(os.environ.get("TCG_ENV_FILE", "~/.config/tcg-scanner/env"))
 STATE_DIR = os.path.expanduser(os.environ.get("TCG_STATE_DIR", "~/.local/state/tcg-scanner"))
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 LOCK_FILE = os.path.join(STATE_DIR, "lock")
+BACKOFF_MINS = (1, 2, 5, 15)
 TRACKED = ("on_sale", "in_stock", "drawing")
+KEPT = ("source", "name", "price", "currency", "url", "sale_start", "sale_end")
 
 
 def log(msg):
@@ -63,6 +66,13 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
+def pages_remote():
+    import subprocess
+    r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)), "remote", "get-url", "origin"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() or None
+
+
 def key(p):
     return f"{p['source']}:{p['id']}"
 
@@ -85,7 +95,11 @@ def diff(old, products, now=None):
     for p in products:
         k = key(p)
         prev = old.get(k)
-        state[k] = {f: p[f] for f in ("name",) + TRACKED}
+        stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        changed = prev is None or any(prev.get(f) != p[f] for f in TRACKED)
+        state[k] = {f: p.get(f) for f in KEPT + TRACKED}
+        state[k]["first_seen"] = (prev or {}).get("first_seen") or stamp
+        state[k]["last_change"] = stamp if changed else (prev or {}).get("last_change")
         actionable = p["on_sale"] and (p["in_stock"] or p["drawing"])
         if prev is None:
             if actionable or (not p["on_sale"] and _future(p["sale_start"], now)):
@@ -192,10 +206,19 @@ def main():
     except BlockingIOError:
         log("previous run still going, skipping")
         return 0
+    site = Site(STATE_DIR, pages_remote())
 
-    by_source = {}
+    if not args.dry_run and not args.test_alert and backing_off(site):
+        return 0
+
+    by_source, errors = {}, []
     for a in ADAPTERS:
-        got = a.fetch()
+        try:
+            got = a.fetch()
+        except Exception as e:  # one broken source must not stop the others
+            errors.append(f"{a.SOURCE}: {type(e).__name__}: {e}")
+            log(f"{a.SOURCE}: FAILED {errors[-1]}")
+            continue
         log(f"{a.SOURCE}: {len(got)} products, {sum(p['on_sale'] for p in got)} on sale")
         by_source[a.SOURCE] = got
     products = [p for got in by_source.values() for p in got]
@@ -209,20 +232,54 @@ def main():
         log("test alert posted")
         return 0
 
-    state, alerts = plan(load_state() or {}, by_source)
+    old = load_state() or {}
+    state, alerts = plan(old, by_source)
     lines = [format_alert(k, p) for k, p in alerts]
     if args.dry_run:
         for line in lines:
             print(line, "\n")
         log(f"dry-run: {len(alerts)} alert(s), nothing posted or saved")
         return 0
+    env = load_env()
     if lines:
-        env = load_env()
         for batch in chunks(lines):
             post(env, batch)
         log(f"posted {len(alerts)} alert(s): " + ", ".join(f"{k} {p['id']}" for k, p in alerts))
     save_state(state)
-    return 0
+
+    ok = not errors
+    sources = {src: {"count": len(got), "on_sale": sum(p["on_sale"] for p in got)} for src, got in by_source.items()}
+    flipped = site.record(ok, sources, "; ".join(errors), alerts)
+    fails = site.failures()
+    if flipped:
+        msg = (f"**SCANNER BACKING OFF** · {'; '.join(errors)[:300]}\nRetrying in {BACKOFF_MINS[1]} min, "
+               f"widening to {BACKOFF_MINS[-1]} min while it keeps failing." if not ok
+               else "**SCANNER RECOVERED** · polling every minute again.")
+        try:
+            post(env, [msg])
+        except Exception as e:
+            log(f"health alert failed: {e}")
+    changed = state != old
+    if site.due(force=changed or flipped):
+        try:
+            site.publish(state)
+            log("dashboard published")
+        except Exception as e:
+            log(f"dashboard publish failed: {e}")
+    return 0 if ok else 1
+
+
+def backing_off(site):
+    """After failures, skip runs until the backoff interval has passed."""
+    fails = site.failures()
+    if not fails:
+        return False
+    wait = BACKOFF_MINS[min(fails, len(BACKOFF_MINS) - 1)] * 60
+    since = site.since_last_run()
+    if since is not None and since < wait - 5:
+        log(f"backing off: {fails} failure(s), next try in {int(wait - since)}s")
+        return True
+    return False
 
 
 if __name__ == "__main__":

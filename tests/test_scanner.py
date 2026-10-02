@@ -122,5 +122,33 @@ class Normalize(unittest.TestCase):
         self.assertFalse(pbandai.normalize(raw)["in_stock"])
 
 
+class Health(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from dashboard import Site
+        self.dir = tempfile.mkdtemp()
+        self.site = Site(self.dir)
+
+    def test_flip_only_on_change_and_backoff_widens(self):
+        self.assertFalse(self.site.record(True, {"pbandai": {"count": 1}}))
+        self.assertTrue(self.site.record(False, error="HTTPError 403"))
+        self.assertFalse(self.site.record(False, error="HTTPError 403"))
+        self.assertEqual(self.site.failures(), 2)
+        self.assertTrue(scanner.backing_off(self.site))
+        self.assertTrue(self.site.record(True, {}))
+        self.assertFalse(scanner.backing_off(self.site))
+
+    def test_alert_log_newest_first_and_capped(self):
+        for i in range(60):
+            self.site.record(True, {}, alerts=[("NEW", prod(f"A{i}"))])
+        import json
+        log = json.load(open(os.path.join(self.dir, "alerts.json")))
+        self.assertEqual(len(log), 50)
+        self.assertEqual(log[0]["id"], "A59")
+
+    def test_publish_without_remote_is_a_noop(self):
+        self.assertFalse(self.site.publish({}))
+
+
 if __name__ == "__main__":
     unittest.main()

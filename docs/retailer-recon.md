@@ -44,7 +44,7 @@ own JSON API from inside the loaded page (same origin, the page's cookies). With
   `{locationId:"511", zipCode:"30606", showOnShelf:true, lookupInStoreQuantity:true, consolidated:true, showInStore:true, onlyBestBuyLocations:true, pickupTypes:[...], items:[{sku, quantity:1, itemSeqNumber:"1", ...}]}`
   returns `buttonState[].buttonState` (SOLD_OUT at 23:22Z), `shipping.items[].shippingEligible`, `ispu.items[].{pickupEligible, inStoreOnly, locations}`.
   Multiple SKUs fit in one call. Store pickup implies sold by Best Buy, so pickup at 511 doubles as the first-party gate.
-  `/button-state/api/v5/button-state` returns 404 HTML, so it's not usable.
+  `/button-state/api/v5/button-state` returns HTTP 400 with a "Page Not Found" HTML page, so it's not usable.
 - Discovery: `/site/searchpage.jsp?st=one+piece+card+game` loads (listCount 70). The top tiles are OP-17 SKUs 1307787, 1307679, 6685240 and IB-07 1297155.
   OPEN: the in-page SKU-to-title extraction returned 0 titles, because the current markup is not `li.sku-item`.
   Next: return one tile's outerHTML (about 1.5KB) to learn the selectors, then build the adapter.

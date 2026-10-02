@@ -262,8 +262,10 @@ def main():
     changed = state != old
     if site.due(force=changed or flipped):
         try:
-            site.publish(state)
-            log("dashboard published")
+            if site.publish(state):
+                log("dashboard published")
+            else:
+                log("dashboard not published: no git remote")
         except Exception as e:
             log(f"dashboard publish failed: {e}")
     return 0 if ok else 1

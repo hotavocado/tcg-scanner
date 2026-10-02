@@ -86,7 +86,7 @@ function chips(p) {
 function card(p, extra = "") {
   return `<div class="card"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>
     <div class="meta">${extra}<span>${money(p.price)}</span>${chips(p)}<span>${esc(SOURCES[p.source] || p.source)}</span>
-    <span>changed ${esc(ago(p.last_change))}</span></div></div>`;
+    <span>${p.last_change ? `changed ${esc(ago(p.last_change))}` : `watching since ${esc(when(p.first_seen))}`}</span></div></div>`;
 }
 
 function render(d) {

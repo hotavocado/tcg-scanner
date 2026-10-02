@@ -4,7 +4,7 @@ Best Buy blocks this VM outright, so one Firecrawl stealth scrape of the search
 page runs bestbuy.js in-page: it walks the result pages, asks storeAvailability
 about every SKU in one call, and reads price off the product page only for SKUs
 that can be picked up at 511. One poll is one Firecrawl credit, which is why
-this source polls every INTERVAL_MINS rather than every minute.
+this source polls at fixed times (RUN_AT) rather than every minute.
 
 Gates (docs/retailer-recon.md): on_sale means not a known marketplace listing
 (Apollo seller classification is not "3P"), in_stock means pickup at 511 at or
@@ -18,7 +18,10 @@ import urllib.parse
 import urllib.request
 
 SOURCE = "bestbuy"
-INTERVAL_MINS = 10
+# Mike 2026-10-02 (dm-alyssa 84680, upper 84683): twice a day. 08:00 is the
+# overnight-restock-before-open check. 2 credits/day.
+RUN_AT = ("08:00", "15:00")
+RUN_TZ = "America/New_York"
 SEARCH_URL = "https://www.bestbuy.com/site/searchpage.jsp?st=one+piece+card+game"
 API = "https://api.firecrawl.dev/v2/scrape"
 KEY_FILE = os.path.expanduser(os.environ.get("TCG_FIRECRAWL_ENV", "~/.claude/secrets/firecrawl.env"))

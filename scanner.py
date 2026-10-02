@@ -22,6 +22,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from zoneinfo import ZoneInfo
 
 from adapters import ADAPTERS
 from dashboard import Site
@@ -31,6 +32,7 @@ STATE_DIR = os.path.expanduser(os.environ.get("TCG_STATE_DIR", "~/.local/state/t
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 LOCK_FILE = os.path.join(STATE_DIR, "lock")
 BACKOFF_MINS = (1, 2, 5, 15)
+SLOT_RETRIES = 3  # a failed fixed-time poll retries this many times, then waits for the next slot
 TRACKED = ("on_sale", "in_stock", "drawing")
 KEPT = ("source", "name", "price", "currency", "url", "sale_start", "sale_end")
 
@@ -90,10 +92,24 @@ def source_wait(adapter, rec):
     return mins * 60
 
 
+def latest_slot(slots, tz, now):
+    """The most recent fixed run time at or before now, e.g. ("08:00", "15:00")
+    in America/New_York, so the times hold across daylight saving."""
+    zone = ZoneInfo(tz)
+    today = now.astimezone(zone).date()
+    times = [dt.datetime.combine(day, dt.time(*map(int, s.split(":"))), tzinfo=zone)
+             for day in (today - dt.timedelta(days=1), today) for s in slots]
+    return max(t for t in times if t <= now)
+
+
 def source_due(adapter, rec, now):
     if not rec.get("last_try"):
         return True
-    since = (now - dt.datetime.fromisoformat(rec["last_try"].replace("Z", "+00:00"))).total_seconds()
+    last = dt.datetime.fromisoformat(rec["last_try"].replace("Z", "+00:00"))
+    since = (now - last).total_seconds()
+    slots = getattr(adapter, "RUN_AT", None)
+    if slots and not (rec.get("fails") and rec["fails"] <= SLOT_RETRIES):
+        return last < latest_slot(slots, getattr(adapter, "RUN_TZ", "UTC"), now)
     return since >= source_wait(adapter, rec) - 5
 
 

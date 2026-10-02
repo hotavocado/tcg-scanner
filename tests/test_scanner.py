@@ -164,6 +164,29 @@ class Main(unittest.TestCase):
             scanner.main()
             self.assertEqual(len(calls), 2)
 
+    def test_fixed_times_poll_once_per_slot_in_new_york_time(self):
+        a = type("A", (), {"RUN_AT": ("08:00", "15:00"), "RUN_TZ": "America/New_York"})
+        z = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        # EDT: 08:00 ET is 12:00Z
+        self.assertEqual(scanner.latest_slot(a.RUN_AT, a.RUN_TZ, z("2026-10-03T12:30:00Z")), z("2026-10-03T12:00:00Z"))
+        self.assertEqual(scanner.latest_slot(a.RUN_AT, a.RUN_TZ, z("2026-10-03T03:00:00Z")), z("2026-10-02T19:00:00Z"))
+        # EST after Nov 1: 08:00 ET is 13:00Z
+        self.assertEqual(scanner.latest_slot(a.RUN_AT, a.RUN_TZ, z("2026-11-10T13:05:00Z")), z("2026-11-10T13:00:00Z"))
+        rec = {"last_try": "2026-10-02T23:50:00Z"}
+        self.assertFalse(scanner.source_due(a, rec, z("2026-10-03T11:59:00Z")))
+        self.assertTrue(scanner.source_due(a, rec, z("2026-10-03T12:00:30Z")))
+        rec = {"last_try": "2026-10-03T12:00:30Z"}
+        self.assertFalse(scanner.source_due(a, rec, z("2026-10-03T12:01:30Z")))
+
+    def test_failed_slot_retries_then_waits_for_next_slot(self):
+        a = type("A", (), {"RUN_AT": ("08:00", "15:00"), "RUN_TZ": "America/New_York"})
+        z = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        rec = {"last_try": "2026-10-03T12:00:00Z", "fails": 1}
+        self.assertTrue(scanner.source_due(a, rec, z("2026-10-03T12:02:00Z")))
+        rec = {"last_try": "2026-10-03T12:30:00Z", "fails": 4}
+        self.assertFalse(scanner.source_due(a, rec, z("2026-10-03T14:00:00Z")))
+        self.assertTrue(scanner.source_due(a, rec, z("2026-10-03T19:00:30Z")))
+
     def test_failing_source_backs_off_alone(self):
         good, bad = [], []
 

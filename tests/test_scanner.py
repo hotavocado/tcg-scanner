@@ -74,6 +74,22 @@ class Diff(unittest.TestCase):
         self.assertEqual(self.kinds(st, [prod("A1"), prod("B2")]), [])
 
 
+class Plan(unittest.TestCase):
+    def test_empty_first_poll_does_not_seed(self):
+        st, alerts = scanner.plan({}, {"pbandai": []}, NOW)
+        self.assertEqual((st, alerts), ({}, []))
+        st, alerts = scanner.plan(st, {"pbandai": [prod("A1"), prod("B2")]}, NOW)
+        self.assertEqual(alerts, [])
+        self.assertEqual(len(st), 2)
+
+    def test_new_source_seeds_silently_beside_existing(self):
+        old = state_of(prod("A1"))
+        tgt = dict(prod("T1"), source="target")
+        st, alerts = scanner.plan(old, {"pbandai": [prod("A1"), prod("B2")], "target": [tgt]}, NOW)
+        self.assertEqual([(k, p["id"]) for k, p in alerts], [("NEW", "B2")])
+        self.assertIn("target:T1", st)
+
+
 class Format(unittest.TestCase):
     def test_drawing_says_lottery_and_deadline(self):
         s = scanner.format_alert("DRAWING OPEN", prod(drawing=True), NOW)

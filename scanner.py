@@ -100,6 +100,24 @@ def diff(old, products, now=None):
     return alerts, state
 
 
+def plan(old, by_source, now=None):
+    """Diff each source on its own. A source with no saved products yet seeds
+    silently (a fresh install, or a newly added retailer), and a source that
+    returns nothing is skipped, so neither can flood alerts."""
+    state, alerts = dict(old), []
+    for source, products in by_source.items():
+        if not products:
+            log(f"{source}: empty poll, skipped")
+            continue
+        if not any(k.startswith(source + ":") for k in old):
+            _, state = diff(state, products, now)
+            log(f"{source}: seeded {len(products)} products, no alerts")
+            continue
+        found, state = diff(state, products, now)
+        alerts.extend(found)
+    return state, alerts
+
+
 def _when(ts):
     if not ts:
         return "?"
@@ -162,8 +180,9 @@ def chunks(lines, limit=1800):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--test-alert", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--test-alert", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -174,11 +193,12 @@ def main():
         log("previous run still going, skipping")
         return 0
 
-    products = []
+    by_source = {}
     for a in ADAPTERS:
         got = a.fetch()
         log(f"{a.SOURCE}: {len(got)} products, {sum(p['on_sale'] for p in got)} on sale")
-        products.extend(got)
+        by_source[a.SOURCE] = got
+    products = [p for got in by_source.values() for p in got]
 
     if args.test_alert:
         live = [p for p in products if p["on_sale"] and (p["in_stock"] or p["drawing"])] or products
@@ -189,17 +209,7 @@ def main():
         log("test alert posted")
         return 0
 
-    old = load_state()
-    if old is None:
-        _, state = diff({}, products)
-        if args.dry_run:
-            log(f"dry-run: no state yet; a real run would seed {len(state)} products silently")
-        else:
-            save_state(state)
-            log(f"seeded {len(state)} products, no alerts")
-        return 0
-
-    alerts, state = diff(old, products)
+    state, alerts = plan(load_state() or {}, by_source)
     lines = [format_alert(k, p) for k, p in alerts]
     if args.dry_run:
         for line in lines:

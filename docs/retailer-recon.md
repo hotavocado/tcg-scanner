@@ -76,7 +76,7 @@ IN reading on a card item kills it, and that reading alerts like any other sourc
 - Controls: positive = 6685240 (OP-17 single pack, $4.99, 1P), SOLD_OUT tonight; confirmed only when the scanner catches its next restock.
   Negative = the 15 3P listings, e.g. ST-31 12940921 and the C3747 Japanese imports, which must never alert.
 
-## Walmart: recon done, store pinning SOLVED, NOT built (2026-10-03, ~15 Firecrawl credits, zero requests from this VM)
+## Walmart: LIVE in the scanner (adapters/walmart.py, 08:00 and 15:00 America/New_York; recon 2026-10-03, zero requests from this VM)
 
 - Stores (nearByNodes at zip 30606): **1400 = Athens Epps Bridge Parkway Supercenter** (1911 Epps Bridge Pkwy, 30606),
   **2811 = Athens Lexington Rd Supercenter** (4375 Lexington Rd, 30605). Mike said "Old Lexington Rd"; 2811 is the only
@@ -101,12 +101,28 @@ IN reading on a card item kills it, and that reading alerts like any other sourc
   - One Piece: ST-23 15840957168, Ace & Newgate 16810169805 and Double Pack 16417069740 show only marketplace offers on their
     product pages, with PICKUP:NOT_AVAILABLE at the pinned store and no Walmart.com offer in the payload. The Walmart-only search
     returned zero One Piece items at both stores, where unpinned it had listed 20 One Piece items as Walmart.com, STORE-only, OUT_OF_STOCK.
-- **What is NOT measured:** whether a Walmart-sold One Piece item that IS on the shelf shows up in the pinned search or on its
-  product page. Every reading tonight is negative. Positive control: none yet (Mike's "tons left", dm 84458, was Target).
-- Proposed adapter, one scrape per poll for both stores: drive the chooser to 1400, read the Walmart-only and plain searches
-  pinned, replay setPickup for 2811, read again. Alert only on sellerName Walmart.com, PICKUP IN_STOCK at the pinned store,
-  One Piece by name, under the MSRP ceiling. Fail the poll if TACTA (or another Walmart-sold control) doesn't read IN at each store.
+- **Positive control missing:** no One Piece item has been seen on a shelf at 1400 or 2811 and read alongside, so every One Piece
+  reading is negative and none has been checked against the shelf. Mike's "tons left" (dm 84458) was Target, not Walmart.
+  Hypothesis, NOT measured: a Walmart-sold One Piece item that is on the shelf shows up in the pinned search as IN_STOCK at that
+  store. Waiting on Mike for a Walmart sighting (which item, which store, when).
+- Adapter as built (one scrape, ~41s, 1 credit for both stores): discovery search unpinned (Walmart.com only), drive the chooser to
+  1400, read pinned, replay setPickup for 2811, read again. Alert on sellerName Walmart.com, IN_STOCK or LIMITED_STOCK with pickup
+  at the pinned store (or STORE-only while pinned), One Piece by name, not priced over the MSRP ceiling. The poll fails if TACTA
+  doesn't read pickup IN_STOCK at each store or the session isn't pinned there.
+- **Price is usually missing, so it can't be a requirement:** in the first live run, all 20 One Piece catalog items and all 7
+  in-stock items at the pinned stores had neither `currentPrice` nor `linePrice`. A missing price alerts as "price ?"; only a
+  present price over the ceiling blocks. Scalpers are kept out by the seller gate, not the price gate. (Codex review of 665920f.)
 
-## Not started
+## Barnes & Noble: DEAD END, nothing to watch online (2026-10-03, 2 Firecrawl credits, zero requests from this VM)
 
-Barnes & Noble (Atlanta Hwy).
+- Store: Athens 2974 (Atlanta Hwy) = Shopify location `gid://shopify/Location/85137522929`.
+- Access: the site is Shopify Hydrogen. From inside a Firecrawl stealth page, same-origin `POST /api/unstable/graphql.json`
+  (the Storefront API proxy, no token needed) answers `search` and `products` queries, and
+  `variant.storeAvailability(near:{latitude,longitude})` gives per-store `available`. Instrument control: it reads real
+  per-store values at 2974 (Monopoly: One Piece and LEGO Going Merry available, CLUE: One Piece not).
+- **No One Piece card product in the catalog:** the full `vendor:Bandai*` set is 143 products (Bandai Hobby, Gunpla, Tamashii,
+  Shokugan) with no card game; 1000 `one piece` search results are manga, figures, LEGO and board games with no booster,
+  starter deck or TCG; "one piece card game", "one piece booster", "one piece tcg", "one piece starter deck" and
+  "bandai card game" turn up none either.
+- So the scanner can't watch B&N. If the Atlanta Hwy store has OP packs on its shelf, they aren't in the online catalog.
+  Hypothesis, NOT measured: B&N's system doesn't receive OP booster packs (the Reddit line), so any shelf stock is invisible online.

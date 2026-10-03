@@ -7,9 +7,15 @@ One Firecrawl scrape covers both stores (docs/retailer-recon.md).
 Products are the Walmart-sold One Piece items found by an unpinned search (every
 one, whatever its stock) plus any a pinned search turns up, once per store.
 Gates: sold by Walmart.com, in stock at the pinned store (pickup there, or an
-in-store-only item while that store is pinned), price at or under the MSRP
+in-store-only item while that store is pinned), and not priced over the MSRP
 ceiling. Marketplace sellers, the scalper listings that fill Walmart's search,
 are dropped in the page and never become products.
+
+Price is usually missing: in the 2026-10-03 live run, all 20 One Piece catalog
+items and all 7 in-stock items at the pinned stores came back with no price
+(in-store-only items carry neither currentPrice nor linePrice). So only a price
+that is present and over the ceiling blocks; a missing one alerts as "price ?".
+Requiring a price would mean Walmart never alerts at all.
 
 Instrument control: TACTA 2nd Edition, a Walmart-sold item that read pickup
 IN_STOCK at both stores on 2026-10-03. Each store's read must show the session
@@ -58,7 +64,7 @@ def normalize(item, store, here):
     name = clean(item.get("name"))
     price = (here or {}).get("price") or item.get("price")
     cap = ceiling(name)
-    within = price is not None and (cap is None or price <= cap)
+    within = price is None or cap is None or price <= cap
     available = bool(here) and here.get("avail") in AVAILABLE and (store in here.get("pickup", []) or here.get("ftype") == "STORE")
     return {
         "source": SOURCE,

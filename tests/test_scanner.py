@@ -486,11 +486,16 @@ class Walmart(unittest.TestCase):
         a, _ = walmart.parse(self.raw(at1400=[wm(price=12.97, avail="IN_STOCK", ftype="FC", pickup=["3235"])]))
         self.assertFalse(a["in_stock"])
 
-    def test_over_msrp_or_no_price_never_alerts(self):
+    def test_over_msrp_never_alerts(self):
         a, _ = walmart.parse(self.raw(at1400=[wm(price=45.0, avail="IN_STOCK")]))
         self.assertFalse(a["in_stock"])
-        a, _ = walmart.parse(self.raw(at1400=[wm(avail="IN_STOCK")]))
-        self.assertFalse(a["in_stock"])
+
+    def test_missing_price_still_alerts(self):
+        # Live 2026-10-03: every in-stock STORE item at both pinned stores had no price.
+        a, b = walmart.parse(self.raw(at1400=[wm(avail="IN_STOCK")]))
+        self.assertTrue(a["in_stock"])
+        self.assertIsNone(a["price"])
+        self.assertFalse(b["in_stock"])
 
     def test_new_item_found_only_when_pinned_is_kept(self):
         ps = walmart.parse(self.raw(at2811=[wm(id="999", name="One Piece Card Game Booster Pack OP-17", price=4.97, avail="IN_STOCK")]))

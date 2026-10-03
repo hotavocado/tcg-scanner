@@ -76,30 +76,36 @@ IN reading on a card item kills it, and that reading alerts like any other sourc
 - Controls: positive = 6685240 (OP-17 single pack, $4.99, 1P), SOLD_OUT tonight; confirmed only when the scanner catches its next restock.
   Negative = the 15 3P listings, e.g. ST-31 12940921 and the C3747 Japanese imports, which must never alert.
 
-## Walmart: recon only, NOT built (2026-10-02/03, ~10 Firecrawl credits, zero requests from this VM)
+## Walmart: recon done, store pinning SOLVED, NOT built (2026-10-03, ~15 Firecrawl credits, zero requests from this VM)
 
-- Stores, from walmart.com/store-directory/ga/athens: **1400 = Epps Bridge Pkwy Supercenter** (1911 Epps Bridge Pkwy, 30606),
-  **2811 = Lexington Rd Supercenter** (4375 Lexington Rd, 30605). Mike said "Old Lexington Rd"; 2811 is the only Lexington Rd
-  store in the directory, so that mapping is INFERRED. (5267 is a Neighborhood Market; 3130 Atlanta Hwy is the third Athens store.)
-- Access: a Firecrawl stealth page on walmart.com loads fine and same-origin `fetch` of `/search` and `/ip/<id>` returns
-  `__NEXT_DATA__` (200). No bot wall seen in ~9 scrapes.
-- Plain search `q=one piece card game`: 64 items, every One Piece card listing sold by a marketplace seller, `IN_STOCK` for
-  shipping only, $10 to $360. Seller fields: `sellerName`, `sellerId`; first party is `sellerName` "Walmart.com",
-  `sellerId` F55CDC31AB754BB68FE0B39041159D63.
-- Search filtered to Walmart as seller (`facet=retailer_type:Walmart`): 21 items, 20 One Piece (starters ST-08/14/23/24/25/28,
-  set blisters, double packs, illustration boxes). Every one reads `fulfillmentType` STORE (in-store only), `OUT_OF_STOCK`,
-  with an empty price. The same usItemIds carry marketplace offers on their product pages: the product-page buy box is the
-  scalper, so the 1P store offer has to be read off search or another call, never off the page's primary offer.
-- **The blocker: the store can't be pinned.** Walmart resolves the store server-side from the visitor's location. Over
-  this session the proxy landed in Maryland (assortmentStoreId 3035) and North Miami Beach (3235). What did NOT move it,
-  each measured: `stores=1400` and `affinityOverride=store_led` on /search; `/store/1400-athens-ga/search?q=` (renders the
-  store page with no results); overwriting `assortmentStoreId` and `xptc` cookies (the server re-sets them to the proxy's
-  store on the next response). So every availability above is for some far-away store, not Athens.
-- Open routes, unmeasured: (1) drive the site's own "Pickup or delivery?" store chooser in-page and capture the mutation
-  it sends (one attempt opened the panel, but the zip went into site search; that needs the panel's own store-change link);
-  (2) a residential proxy geolocated to Athens (Browserbase did that for Target), which would default to a nearby store
-  but can't name which one.
-- No positive control yet. Mike's "tons left" (dm 84458) was about Target Atlanta Hwy, not Walmart.
+- Stores (nearByNodes at zip 30606): **1400 = Athens Epps Bridge Parkway Supercenter** (1911 Epps Bridge Pkwy, 30606),
+  **2811 = Athens Lexington Rd Supercenter** (4375 Lexington Rd, 30605). Mike said "Old Lexington Rd"; 2811 is the only
+  Lexington Rd store, so that mapping is INFERRED. 3130 Atlanta Hwy is a Neighborhood Market, not in scope.
+- Access: a Firecrawl stealth page on walmart.com loads; same-origin `fetch` of `/search` and `/ip/<id>` returns `__NEXT_DATA__`.
+- First party = `sellerName` "Walmart.com", `sellerId` F55CDC31AB754BB68FE0B39041159D63. Plain search for "one piece card game"
+  is marketplace scalpers ($10 to $360, IN_STOCK for shipping). On product pages the buy box is the marketplace seller, so
+  the product page's primary offer must never be read as Walmart's.
+- **Store pinning.** Walmart picks the store server-side from the visitor's location (the proxy landed in MD, FL, NC and GA
+  tonight). URL params (`stores=`, `/store/<id>/search`) and cookie overwrites do NOT move it: the server re-sets
+  `assortmentStoreId`. What works is the site's own chooser:
+  - `GET /orchestra/home/graphql/nearByNodes/<hash>?variables={input:{postalCode:"30606",accessTypes:[PICKUP_INSTORE,PICKUP_CURBSIDE],...}}`
+    lists stores with `capabilities[].accessPointId` (2811 PICKUP_INSTORE = 863aa04a-5312-4520-a9fa-9eb334b0890d).
+  - `POST /orchestra/cartxo/graphql/setPickup/<hash>` with `{input:{accessPointId, cartId:"000...0", postalCode, storeId}}`
+    pins the store (`assortmentStoreId` and `isoLoc=US_GA` follow). Measured: driving the UI to Epps Bridge fired it with
+    storeId 1400. Replaying the captured request (same headers) with 2811's accessPointId returned 200 and moved the session to 2811.
+  - The hashes are persisted-query ids taken from the live bundle and will rotate, so the adapter should drive the UI once
+    per poll and replay `setPickup` for the second store, not hardcode the hash.
+- **Readings at the pinned stores (00:1xZ):**
+  - Instrument control: TACTA 2nd Edition 17708161715, sold by Walmart.com, $7.97, reads PICKUP:IN_STOCK at 1400 and at 2811.
+    Store-scoped pickup is real data, not a national default.
+  - One Piece: ST-23 15840957168, Ace & Newgate 16810169805 and Double Pack 16417069740 show only marketplace offers on their
+    product pages, with PICKUP:NOT_AVAILABLE at the pinned store and no Walmart.com offer in the payload. The Walmart-only search
+    returned zero One Piece items at both stores, where unpinned it had listed 20 One Piece items as Walmart.com, STORE-only, OUT_OF_STOCK.
+- **What is NOT measured:** whether a Walmart-sold One Piece item that IS on the shelf shows up in the pinned search or on its
+  product page. Every reading tonight is negative. Positive control: none yet (Mike's "tons left", dm 84458, was Target).
+- Proposed adapter, one scrape per poll for both stores: drive the chooser to 1400, read the Walmart-only and plain searches
+  pinned, replay setPickup for 2811, read again. Alert only on sellerName Walmart.com, PICKUP IN_STOCK at the pinned store,
+  One Piece by name, under the MSRP ceiling. Fail the poll if TACTA (or another Walmart-sold control) doesn't read IN at each store.
 
 ## Not started
 

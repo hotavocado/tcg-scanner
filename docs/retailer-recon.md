@@ -76,6 +76,31 @@ IN reading on a card item kills it, and that reading alerts like any other sourc
 - Controls: positive = 6685240 (OP-17 single pack, $4.99, 1P), SOLD_OUT tonight; confirmed only when the scanner catches its next restock.
   Negative = the 15 3P listings, e.g. ST-31 12940921 and the C3747 Japanese imports, which must never alert.
 
+## Walmart: recon only, NOT built (2026-10-02/03, ~10 Firecrawl credits, zero requests from this VM)
+
+- Stores, from walmart.com/store-directory/ga/athens: **1400 = Epps Bridge Pkwy Supercenter** (1911 Epps Bridge Pkwy, 30606),
+  **2811 = Lexington Rd Supercenter** (4375 Lexington Rd, 30605). Mike said "Old Lexington Rd"; 2811 is the only Lexington Rd
+  store in the directory, so that mapping is INFERRED. (5267 is a Neighborhood Market; 3130 Atlanta Hwy is the third Athens store.)
+- Access: a Firecrawl stealth page on walmart.com loads fine and same-origin `fetch` of `/search` and `/ip/<id>` returns
+  `__NEXT_DATA__` (200). No bot wall seen in ~9 scrapes.
+- Plain search `q=one piece card game`: 64 items, every One Piece card listing sold by a marketplace seller, `IN_STOCK` for
+  shipping only, $10 to $360. Seller fields: `sellerName`, `sellerId`; first party is `sellerName` "Walmart.com",
+  `sellerId` F55CDC31AB754BB68FE0B39041159D63.
+- Search filtered to Walmart as seller (`facet=retailer_type:Walmart`): 21 items, 20 One Piece (starters ST-08/14/23/24/25/28,
+  set blisters, double packs, illustration boxes). Every one reads `fulfillmentType` STORE (in-store only), `OUT_OF_STOCK`,
+  with an empty price. The same usItemIds carry marketplace offers on their product pages: the product-page buy box is the
+  scalper, so the 1P store offer has to be read off search or another call, never off the page's primary offer.
+- **The blocker: the store can't be pinned.** Walmart resolves the store server-side from the visitor's location. Over
+  this session the proxy landed in Maryland (assortmentStoreId 3035) and North Miami Beach (3235). What did NOT move it,
+  each measured: `stores=1400` and `affinityOverride=store_led` on /search; `/store/1400-athens-ga/search?q=` (renders the
+  store page with no results); overwriting `assortmentStoreId` and `xptc` cookies (the server re-sets them to the proxy's
+  store on the next response). So every availability above is for some far-away store, not Athens.
+- Open routes, unmeasured: (1) drive the site's own "Pickup or delivery?" store chooser in-page and capture the mutation
+  it sends (one attempt opened the panel, but the zip went into site search; that needs the panel's own store-change link);
+  (2) a residential proxy geolocated to Athens (Browserbase did that for Target), which would default to a nearby store
+  but can't name which one.
+- No positive control yet. Mike's "tons left" (dm 84458) was about Target Atlanta Hwy, not Walmart.
+
 ## Not started
 
-Walmart (Old Lexington Rd, Epps Bridge) and Barnes & Noble (Atlanta Hwy).
+Barnes & Noble (Atlanta Hwy).

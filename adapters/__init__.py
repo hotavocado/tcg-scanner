@@ -4,6 +4,6 @@ Normalized product: source, id, name, price, currency, on_sale, in_stock,
 drawing, sale_start, sale_end, url.
 """
 
-from . import bestbuy, pbandai, target
+from . import bestbuy, pbandai, target, walmart
 
-ADAPTERS = [pbandai, bestbuy, target]
+ADAPTERS = [pbandai, bestbuy, target, walmart]

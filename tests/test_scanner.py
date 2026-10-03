@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scanner
-from adapters import bestbuy, firecrawl, pbandai, target
+from adapters import bestbuy, firecrawl, pbandai, target, walmart
 
 NOW = dt.datetime(2026, 10, 2, 23, 0, tzinfo=dt.timezone.utc)
 
@@ -449,6 +449,83 @@ class Target(unittest.TestCase):
             target.scrape()
         self.assertEqual(sorted(json.loads(seen["__TCINS__"])), sorted(list(target.TCINS) + [target.CONTROL_TCIN]))
         self.assertIn("__TCINS__", open(os.path.join(os.path.dirname(target.__file__), "target.js")).read())
+
+
+def wm(id="15840957168", name="Collectible One Piece Starter Deck 23: RED Shanks", price=None, avail="OUT_OF_STOCK", ftype="STORE", pickup=()):
+    return {"id": id, "name": name, "price": price, "avail": avail, "ftype": ftype, "pickup": list(pickup)}
+
+
+def wm_store(store, items=(), pinned=None, control=None):
+    return {"store": store, "pinned": pinned or store, "items": list(items),
+            "control": control or {"seller": "Walmart.com", "storeIds": [store], "pickup": "IN_STOCK"}}
+
+
+class Walmart(unittest.TestCase):
+    def raw(self, at1400=(), at2811=(), catalog=None, **kw):
+        return {"errors": [], "catalog": [wm()] if catalog is None else catalog,
+                "stores": [kw.get("s1400") or wm_store("1400", at1400), kw.get("s2811") or wm_store("2811", at2811)]}
+
+    def test_catalog_item_out_at_both_stores(self):
+        ps = walmart.parse(self.raw())
+        self.assertEqual([p["id"] for p in ps], ["1400-15840957168", "2811-15840957168"])
+        self.assertEqual(ps[0]["name"], "One Piece Starter Deck 23: RED Shanks · Walmart Epps Bridge")
+        self.assertTrue(all(p["on_sale"] and not p["in_stock"] for p in ps))
+
+    def test_pickup_at_the_pinned_store_is_in_stock(self):
+        here = wm(price=12.97, avail="IN_STOCK", ftype="FC", pickup=["1400"])
+        a, b = walmart.parse(self.raw(at1400=[here]))
+        self.assertTrue(a["in_stock"])
+        self.assertEqual(a["price"], 12.97)
+        self.assertFalse(b["in_stock"])
+
+    def test_in_store_only_counts_while_pinned(self):
+        a, _ = walmart.parse(self.raw(at1400=[wm(price=12.97, avail="IN_STOCK")]))
+        self.assertTrue(a["in_stock"])
+
+    def test_pickup_at_another_store_does_not_count(self):
+        a, _ = walmart.parse(self.raw(at1400=[wm(price=12.97, avail="IN_STOCK", ftype="FC", pickup=["3235"])]))
+        self.assertFalse(a["in_stock"])
+
+    def test_over_msrp_or_no_price_never_alerts(self):
+        a, _ = walmart.parse(self.raw(at1400=[wm(price=45.0, avail="IN_STOCK")]))
+        self.assertFalse(a["in_stock"])
+        a, _ = walmart.parse(self.raw(at1400=[wm(avail="IN_STOCK")]))
+        self.assertFalse(a["in_stock"])
+
+    def test_new_item_found_only_when_pinned_is_kept(self):
+        ps = walmart.parse(self.raw(at2811=[wm(id="999", name="One Piece Card Game Booster Pack OP-17", price=4.97, avail="IN_STOCK")]))
+        self.assertEqual(sorted(p["id"] for p in ps), ["1400-15840957168", "2811-15840957168", "2811-999"])
+        self.assertTrue([p for p in ps if p["id"] == "2811-999"][0]["in_stock"])
+
+    def test_other_games_are_not_products(self):
+        tacta = wm(id="17708161715", name="TACTA 2nd Edition Card Game", price=7.97, avail="IN_STOCK", pickup=["1400"])
+        ps = walmart.parse(self.raw(at1400=[tacta], catalog=[wm(), tacta]))
+        self.assertNotIn("1400-17708161715", [p["id"] for p in ps])
+
+    def test_control_and_pin_are_required(self):
+        with self.assertRaises(RuntimeError):
+            walmart.parse(self.raw(s2811=wm_store("2811", pinned="3235")))
+        with self.assertRaises(RuntimeError):
+            walmart.parse(self.raw(s1400=wm_store("1400", control={"storeIds": ["1400"], "pickup": "NOT_AVAILABLE"})))
+        with self.assertRaises(RuntimeError):
+            walmart.parse(self.raw(s1400=wm_store("1400", control={"storeIds": ["3235"], "pickup": "IN_STOCK"})))
+        with self.assertRaises(RuntimeError):
+            walmart.parse({"errors": [], "catalog": [wm()], "stores": [wm_store("1400")]})
+
+    def test_page_errors_and_empty_discovery_raise(self):
+        with self.assertRaises(RuntimeError):
+            walmart.parse(dict(self.raw(), errors=["chooser: no Save button"]))
+        with self.assertRaises(RuntimeError):
+            walmart.parse(self.raw(catalog=[]))
+
+    def test_script_steps_become_actions(self):
+        with open(os.path.join(os.path.dirname(walmart.__file__), "walmart.js")) as f:
+            acts = firecrawl.actions(f.read())
+        runs = [a for a in acts if a["type"] == "executeJavascript"]
+        self.assertEqual(len(acts), 2 * len(runs))
+        self.assertEqual(len(runs), 8)
+        self.assertNotIn("@step", "".join(a["script"] for a in runs))
+        self.assertEqual(firecrawl.actions("x()"), [{"type": "wait", "milliseconds": 1500}, {"type": "executeJavascript", "script": "x()"}])
 
 
 if __name__ == "__main__":

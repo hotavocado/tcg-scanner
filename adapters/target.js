@@ -15,7 +15,11 @@
     const r = await fetch("https://redsky.target.com/redsky_aggregations/v1/web/product_summary_with_fulfillment_v1?" +
       new URLSearchParams(p), { credentials: "include" });
     out.status = r.status;
-    const j = await r.json();
+    const body = await r.text();
+    let j;
+    try { j = JSON.parse(body); } catch (e) {
+      throw new Error(`http ${r.status}, non-JSON body: ${body.slice(0, 120).replace(/\s+/g, " ")}`);
+    }
     for (const s of ((j.data || {}).product_summaries) || []) {
       const item = s.item || {};
       const f = s.fulfillment || {};

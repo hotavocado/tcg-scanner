@@ -442,6 +442,11 @@ class Target(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             target.parse({"status": 435, "errors": [], "items": []})
 
+    def test_script_error_reaches_the_log(self):
+        err = "redsky: Error: http 503, non-JSON body: <!DOCTYPE html><html><head><title>Service Unavailable"
+        with self.assertRaisesRegex(RuntimeError, "http 503, non-JSON body: <!DOCTYPE"):
+            target.parse({"status": 503, "errors": [err], "items": []})
+
     def test_script_gets_the_watchlist(self):
         import json
         seen = {}

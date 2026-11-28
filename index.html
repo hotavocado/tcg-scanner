@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OP Drops</title>
+<style>
+:root {
+  --bg: #f6f5f2; --surface: #ffffff; --line: #e4e1da; --text: #1d1b18; --muted: #6b665d;
+  --ok: #1f7a4a; --ok-bg: #e3f3ea; --warn: #8a5a00; --warn-bg: #fbefd5; --bad: #b3261e; --bad-bg: #fbe3e1;
+  --accent: #c2410c; --chip: #efece6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141311; --surface: #1d1b19; --line: #2e2b27; --text: #ece8e1; --muted: #9c968c;
+    --ok: #6fd39b; --ok-bg: #16301f; --warn: #f0c060; --warn-bg: #352a12; --bad: #ff8a80; --bad-bg: #3a1714;
+    --accent: #fb923c; --chip: #2a2723;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 4px 0 12px; letter-spacing: -0.01em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 24px 0 8px; }
+.health { border-radius: 12px; padding: 12px 14px; font-weight: 600; }
+.health small { display: block; font-weight: 400; color: inherit; opacity: 0.85; margin-top: 2px; }
+.ok { background: var(--ok-bg); color: var(--ok); }
+.warn { background: var(--warn-bg); color: var(--warn); }
+.bad { background: var(--bad-bg); color: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.card a { color: var(--text); text-decoration: none; font-weight: 600; }
+.card a:hover { text-decoration: underline; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.chip { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+.chip.on { background: var(--ok-bg); color: var(--ok); }
+.chip.lotto { background: var(--warn-bg); color: var(--warn); }
+.chip.kind { background: var(--accent); color: #fff; }
+.empty { color: var(--muted); font-size: 14px; padding: 4px 0; }
+details summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 6px 0; }
+footer { color: var(--muted); font-size: 12px; margin: 28px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OP Drops</h1>
+  <div id="health" class="health warn">Loading…</div>
+  <div class="stats" id="stats"></div>
+  <h2>Buyable now</h2>
+  <div id="live"></div>
+  <h2>Recent alerts</h2>
+  <div id="alerts"></div>
+  <h2>Everything watched</h2>
+  <details><summary id="allsum">Show all</summary><div id="all"></div></details>
+  <footer id="foot"></footer>
+</main>
+<script>
+const STALE_SECS = 25 * 60;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago = (ts) => {
+  if (!ts) return "never";
+  const s = Math.max(0, (Date.now() - Date.parse(ts)) / 1000);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+const when = (ts) => ts ? new Date(ts).toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "?";
+const money = (p) => typeof p === "number" ? `$${p.toFixed(2)}` : "price ?";
+const SOURCES = {pbandai: "Premium Bandai"};
+
+function chips(p) {
+  const out = [];
+  if (p.on_sale && p.drawing) out.push(`<span class="chip lotto">lottery · enter by ${esc(when(p.sale_end))}</span>`);
+  else if (p.on_sale && p.in_stock) out.push(`<span class="chip on">in stock</span>`);
+  else if (p.on_sale) out.push(`<span class="chip">sold out</span>`);
+  else out.push(`<span class="chip">ended</span>`);
+  return out.join("");
+}
+
+function card(p, extra = "") {
+  return `<div class="card"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>
+    <div class="meta">${extra}<span>${money(p.price)}</span>${chips(p)}<span>${esc(SOURCES[p.source] || p.source)}</span>
+    <span>${p.last_change ? `changed ${esc(ago(p.last_change))}` : `watching since ${esc(when(p.first_seen))}`}</span></div></div>`;
+}
+
+function render(d) {
+  const h = d.health || {};
+  const age = h.last_run ? (Date.now() - Date.parse(h.last_run)) / 1000 : Infinity;
+  const el = $("health");
+  if (h.consecutive_failures > 0) {
+    el.className = "health bad";
+    el.innerHTML = `Scanner failing (${h.consecutive_failures} in a row)<small>${esc(h.last_error)} · last success ${esc(ago(h.last_success))}</small>`;
+  } else if (age > STALE_SECS) {
+    el.className = "health bad";
+    el.innerHTML = `No data for ${esc(ago(h.last_run).replace(" ago", ""))}<small>The scanner or the publish has stopped. Last check ${esc(when(h.last_run))}.</small>`;
+  } else {
+    el.className = "health ok";
+    el.innerHTML = `Data flowing<small>Last check ${esc(ago(h.last_run))} · checks every minute, page updates every ${Math.round(d.heartbeat_secs / 60)} min or on any change</small>`;
+  }
+  const ps = d.products || [];
+  const live = ps.filter((p) => p.present !== false && p.on_sale && (p.in_stock || p.drawing));
+  $("stats").innerHTML = [
+    [ps.length, "watched"], [live.length, "buyable now"], [(d.alerts || []).length, "alerts sent"],
+  ].map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join("");
+  $("live").innerHTML = live.map((p) => card(p)).join("") || `<div class="empty">Nothing buyable right now.</div>`;
+  $("alerts").innerHTML = (d.alerts || []).map((a) => `<div class="card"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.name)}</a>
+    <div class="meta"><span class="chip kind">${esc(a.kind)}</span><span>${money(a.price)}</span><span>${esc(when(a.ts))}</span></div></div>`).join("")
+    || `<div class="empty">No alerts yet. Every alert sent to #op-drops shows up here.</div>`;
+  $("allsum").textContent = `Show all ${ps.length}`;
+  $("all").innerHTML = ps.map((p) => card(p)).join("");
+  $("foot").textContent = `Data published ${when(d.generated_at)} · page refreshes every 60s`;
+}
+
+async function load() {
+  try {
+    const r = await fetch(`data.json?t=${Date.now()}`, {cache: "no-store"});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    render(await r.json());
+  } catch (e) {
+    $("health").className = "health bad";
+    $("health").innerHTML = `Couldn't load data<small>${esc(e.message)}</small>`;
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
